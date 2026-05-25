@@ -14,7 +14,38 @@ export default function Page() {
           Nature Reader API Playground
         </h1>
         <div className="bg-white dark:bg-white rounded-xl shadow-md overflow-hidden border border-zinc-200 dark:border-zinc-700">
-          <SwaggerUI url="/api/openapi" />
+          <SwaggerUI 
+            url="/api/openapi" 
+            persistAuthorization={true} 
+            responseInterceptor={(response) => {
+              // Automatically extract and set Bearer token upon successful login
+              if (response.url.includes('/api/auth/login') && response.status === 200) {
+                try {
+                  const body = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;
+                  const token = body?.accessToken;
+                  if (token) {
+                    const authObj = {
+                      bearerAuth: {
+                        name: 'bearerAuth',
+                        schema: {
+                          type: 'http',
+                          scheme: 'bearer',
+                          bearerFormat: 'JWT'
+                        },
+                        value: token
+                      }
+                    };
+                    localStorage.setItem('authorized', JSON.stringify(authObj));
+                    console.log('Swagger UI Auto-Authorized successfully!');
+                    // Optionally alert the user or refresh page to update UI lock state
+                  }
+                } catch (e) {
+                  console.error('Failed to parse auto-authorization token:', e);
+                }
+              }
+              return response;
+            }}
+          />
         </div>
       </div>
     </div>

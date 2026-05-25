@@ -3,6 +3,7 @@ import { registry } from './registry'
 
 // IMPORTANT: Import all swagger path registration modules here to ensure registry.registerPath gets executed!
 import './auth.swagger'
+import './api.swagger'
 
 export function getOpenApiDocument() {
   const generator = new OpenApiGeneratorV3(registry.definitions)
@@ -18,6 +19,11 @@ export function getOpenApiDocument() {
       {
         url: 'http://localhost:3000',
         description: 'Development Server'
+      }
+    ],
+    security: [
+      {
+        bearerAuth: []
       }
     ]
   })

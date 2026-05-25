@@ -1,0 +1,190 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider   = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =====================================
+// ENUMS
+// =====================================
+enum UserRole {
+  user
+  admin
+}
+
+enum PostStatus {
+  draft
+  pending
+  approved
+  rejected
+}
+
+enum ReportReason {
+  spam
+  abusive_language
+  violence
+  harassment
+  misleading
+  copyright
+  other
+}
+
+enum ReportStatus {
+  pending
+  reviewed
+  rejected
+  action_taken
+}
+
+enum ModerationAction {
+  approved
+  rejected
+  edited
+  deleted
+}
+
+// =====================================
+// MODELS
+// =====================================
+model Profile {
+  id          String    @id @db.Uuid
+  email       String    @unique
+  displayName String    @map("display_name")
+  avatarUrl   String?   @map("avatar_url")
+  bio         String?
+  role        UserRole  @default(user)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz
+
+  posts           Post[]          @relation("UserPosts")
+  approvedPosts   Post[]          @relation("ApprovedPosts")
+  comments        Comment[]
+  likes           PostLike[]
+  reports         PostReport[]    @relation("Reporter")
+  reviewedReports PostReport[]    @relation("Reviewer")
+  moderationLogs  ModerationLog[]
+
+  @@map("profiles")
+  @@index([role])
+}
+
+model Book {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title         String
+  author        String
+  summary       String?
+  coverUrl      String?  @map("cover_url")
+  publishedYear Int?     @map("published_year")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  posts Post[]
+
+  @@unique([title, author])
+  @@map("books")
+}
+
+model Post {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String?     @map("user_id") @db.Uuid
+  bookId          String      @map("book_id") @db.Uuid
+  title           String
+  contentMarkdown String      @map("content_markdown")
+  status          PostStatus  @default(pending)
+  rejectReason    String?     @map("reject_reason")
+  approvedBy      String?     @map("approved_by") @db.Uuid
+  approvedAt      DateTime?   @map("approved_at") @db.Timestamptz
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt       DateTime?   @map("deleted_at") @db.Timestamptz
+
+  user           Profile?        @relation("UserPosts", fields: [userId], references: [id], onDelete: SetNull)
+  book           Book            @relation(fields: [bookId], references: [id], onDelete: Restrict)
+  approver       Profile?        @relation("ApprovedPosts", fields: [approvedBy], references: [id], onDelete: SetNull)
+  comments       Comment[]
+  likes          PostLike[]
+  reports         PostReport[]
+  moderationLogs ModerationLog[]
+
+  @@map("posts")
+  @@index([status])
+  @@index([userId])
+  @@index([bookId])
+}
+
+model Comment {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  postId    String    @map("post_id") @db.Uuid
+  userId    String?   @map("user_id") @db.Uuid
+  content   String
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz
+
+  post Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user Profile? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("comments")
+  @@index([postId])
+  @@index([userId])
+}
+
+model PostLike {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  postId    String   @map("post_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId], name: "unique_post_like")
+  @@map("post_likes")
+  @@index([postId])
+  @@index([userId])
+}
+
+model PostReport {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  postId         String       @map("post_id") @db.Uuid
+  reporterId     String       @map("reporter_id") @db.Uuid
+  reason         ReportReason
+  description    String?
+  status         ReportStatus @default(pending)
+  reviewedBy     String?      @map("reviewed_by") @db.Uuid
+  reviewedAt     DateTime?    @map("reviewed_at") @db.Timestamptz
+  moderationNote String?      @map("moderation_note")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  post     Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reporter Profile  @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reviewer Profile? @relation("Reviewer", fields: [reviewedBy], references: [id], onDelete: SetNull)
+
+  @@unique([reporterId, postId], name: "unique_post_report")
+  @@map("post_reports")
+  @@index([status])
+  @@index([postId])
+}
+
+model ModerationLog {
+  id        String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  postId    String           @map("post_id") @db.Uuid
+  adminId   String           @map("admin_id") @db.Uuid
+  action    ModerationAction
+  reason    String?
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  post  Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  admin Profile @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@map("moderation_logs")
+  @@index([postId])
+  @@index([adminId])
+}
