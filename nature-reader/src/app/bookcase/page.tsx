@@ -4,13 +4,13 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { 
   BookOpen, Star, Sparkles, ChevronRight, Heart, MessageSquare, Edit3, Trash2, Plus, 
-  User as UserIcon, BookCheck, Compass, FileText, Check, Award, X 
+  User as UserIcon, BookCheck, Compass, FileText, Check, Award, X, Camera
 } from "lucide-react";
 import Header from "../../components/layout/Header";
 import Footer from "../../components/layout/Footer";
 import RatingStars from "../../components/ui/RatingStars";
 import { motion, AnimatePresence } from "motion/react";
-import { getBookcaseStats, updateProfile } from "../../lib/actions/book";
+import { getBookcaseStats, updateProfile, uploadAvatarServer, uploadBookCoverServer, createBookInDb } from "../../lib/actions/book";
 
 export default function Bookcase() {
   const router = useRouter();
@@ -25,6 +25,12 @@ export default function Bookcase() {
   const [tempName, setTempName] = useState("");
   const [tempBio, setTempBio] = useState("");
   
+  // Storage upload states
+  const [selectedAvatarFile, setSelectedAvatarFile] = useState<File | null>(null);
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState("");
+  const [selectedCoverFile, setSelectedCoverFile] = useState<File | null>(null);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState("");
+
   // DB stats state
   const [stats, setStats] = useState({
     readCount: 0,
@@ -35,6 +41,13 @@ export default function Bookcase() {
   const [newBookTitle, setNewBookTitle] = useState("");
   const [newBookAuthor, setNewBookAuthor] = useState("");
   const [newBookRating, setNewBookRating] = useState(5.0);
+  const [newBookPublishedYear, setNewBookPublishedYear] = useState("");
+  const [newBookSummary, setNewBookSummary] = useState("");
+
+  // Open Library API search states
+  const [openLibraryResults, setOpenLibraryResults] = useState<any[]>([]);
+  const [isSearchingOL, setIsSearchingOL] = useState(false);
+  const [externalCoverUrl, setExternalCoverUrl] = useState("");
 
   const [notification, setNotification] = useState("");
 
@@ -67,6 +80,16 @@ export default function Bookcase() {
         if (res.profile) {
           setProfileName(res.profile.name);
           setProfileBio(res.profile.bio || "“Sách là những chuyến du hành tâm hồn...”");
+          
+          const syncedUser = {
+            ...user,
+            id: userId,
+            name: res.profile.name,
+            bio: res.profile.bio,
+            avatarUrl: res.profile.avatarUrl || user.avatarUrl
+          };
+          setCurrentUser(syncedUser);
+          localStorage.setItem("currentUser", JSON.stringify(syncedUser));
         }
         setStats({
           readCount: res.readCount,
@@ -102,28 +125,72 @@ export default function Bookcase() {
     setIsEditingProfile(true);
   };
 
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setSelectedAvatarFile(file);
+      if (avatarPreviewUrl) {
+        URL.revokeObjectURL(avatarPreviewUrl);
+      }
+      setAvatarPreviewUrl(URL.createObjectURL(file));
+    }
+  };
+
+  const handleCancelEditProfile = () => {
+    setIsEditingProfile(false);
+    setSelectedAvatarFile(null);
+    if (avatarPreviewUrl) {
+      URL.revokeObjectURL(avatarPreviewUrl);
+      setAvatarPreviewUrl("");
+    }
+  };
+
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (tempName.trim() && currentUser) {
       const userId = currentUser.id || "5c9f5643-4be9-4e78-8742-892410a8d6e3";
       
       try {
+        let uploadedAvatarUrl = currentUser.avatarUrl;
+
+        // Tải ảnh lên Supabase Storage thông qua Server Action (an toàn + bypass RLS)
+        if (selectedAvatarFile) {
+          const uploadFormData = new FormData();
+          uploadFormData.append("file", selectedAvatarFile);
+
+          const uploadResult = await uploadAvatarServer(userId, uploadFormData);
+          if (uploadResult.success && uploadResult.url) {
+            uploadedAvatarUrl = uploadResult.url;
+          } else {
+            console.error("Lỗi khi tải ảnh đại diện lên server:", uploadResult.message);
+            alert("Lỗi tải ảnh: " + uploadResult.message);
+            return;
+          }
+        }
+
         const result = await updateProfile(userId, {
           displayName: tempName,
-          bio: tempBio
+          bio: tempBio,
+          avatarUrl: uploadedAvatarUrl
         });
 
         if (result.success && result.profile) {
           const updatedUser = {
             ...currentUser,
             name: result.profile.name,
-            bio: result.profile.bio
+            bio: result.profile.bio,
+            avatarUrl: result.profile.avatarUrl
           };
           
           setCurrentUser(updatedUser);
           setProfileName(tempName);
           setProfileBio(tempBio);
           setIsEditingProfile(false);
+          setSelectedAvatarFile(null);
+          if (avatarPreviewUrl) {
+            URL.revokeObjectURL(avatarPreviewUrl);
+            setAvatarPreviewUrl("");
+          }
           
           localStorage.setItem("currentUser", JSON.stringify(updatedUser));
           window.dispatchEvent(new Event("auth-state-change"));
@@ -150,16 +217,129 @@ export default function Bookcase() {
     }
   };
 
-  const handleAddBookSubmit = (e: React.FormEvent) => {
+  const handleCoverChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setSelectedCoverFile(file);
+      if (coverPreviewUrl) {
+        URL.revokeObjectURL(coverPreviewUrl);
+      }
+      setCoverPreviewUrl(URL.createObjectURL(file));
+    }
+  };
+
+  const handleCloseAddBookModal = () => {
+    setShowAddBookModal(false);
+    setSelectedCoverFile(null);
+    setNewBookTitle("");
+    setNewBookAuthor("");
+    setNewBookRating(5.0);
+    setNewBookPublishedYear("");
+    setNewBookSummary("");
+    setOpenLibraryResults([]);
+    setExternalCoverUrl("");
+    if (coverPreviewUrl) {
+      // Chỉ thu hồi Object URL nếu nó được tạo bởi local preview, tránh lỗi thu hồi link CDN của Open Library
+      if (coverPreviewUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(coverPreviewUrl);
+      }
+      setCoverPreviewUrl("");
+    }
+  };
+
+  const handleSearchOpenLibrary = async () => {
+    if (!newBookTitle.trim()) {
+      alert("Vui lòng nhập tên sách cần tìm!");
+      return;
+    }
+    setIsSearchingOL(true);
+    setOpenLibraryResults([]);
+    try {
+      const response = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(newBookTitle.trim())}&limit=5`);
+      const data = await response.json();
+      if (data.docs && data.docs.length > 0) {
+        const results = data.docs.map((doc: any) => ({
+          title: doc.title,
+          author: doc.author_name ? doc.author_name[0] : "Chưa rõ tác giả",
+          publishYear: doc.first_publish_year || "",
+          coverUrl: doc.cover_i ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg` : ""
+        }));
+        setOpenLibraryResults(results);
+      } else {
+        triggerNotification("Không tìm thấy kết quả phù hợp trên Open Library.");
+      }
+    } catch (err) {
+      console.error("Lỗi tìm kiếm Open Library:", err);
+      triggerNotification("Không thể kết nối đến Open Library API.");
+    } finally {
+      setIsSearchingOL(false);
+    }
+  };
+
+  const handleSelectOLSuggestion = (suggestion: any) => {
+    setNewBookTitle(suggestion.title);
+    setNewBookAuthor(suggestion.author);
+    setNewBookPublishedYear(suggestion.publishYear ? String(suggestion.publishYear) : "");
+    setNewBookSummary(`Tác phẩm nghệ thuật tuyệt vời "${suggestion.title}" của tác giả ${suggestion.author}. Xuất bản lần đầu năm ${suggestion.publishYear || "chưa rõ"}.`);
+    
+    if (suggestion.coverUrl) {
+      setExternalCoverUrl(suggestion.coverUrl);
+      setCoverPreviewUrl(suggestion.coverUrl);
+    }
+    setOpenLibraryResults([]);
+  };
+
+  const handleAddBookSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBookTitle || !newBookAuthor) return;
 
+    let finalCoverUrl = externalCoverUrl || "https://lh3.googleusercontent.com/aida-public/AB6AXuAC6GKy2vXIuYrlzg-zB_U6wSFH3uOBBk8kru_6awMKuuwQZXT4TL2lDzOtX4V62TZo60yDJR2WHXHX54LJvxyUfzHxiK7sd_zUMpH7-ia76nz6waYryP1Li5z1Bn_FzG18u0V0z8eP8Yxv5Z8JwtDpJlFBz2-m7YuWl_7snHstQUpPrl7KdydPlVMCVSDuNoJMCWccXPBcbMnzRYw6bA3-Ifr0GP4nkS5TKef6ap64VAEXVS7SvagQQ7LrG3IfH3Y419xSKh4U72Y";
+
+    if (selectedCoverFile && currentUser) {
+      try {
+        const uploadFormData = new FormData();
+        uploadFormData.append("file", selectedCoverFile);
+
+        const uploadResult = await uploadBookCoverServer(currentUser.id, uploadFormData);
+        if (uploadResult.success && uploadResult.url) {
+          finalCoverUrl = uploadResult.url;
+          setExternalCoverUrl("");
+        } else {
+          console.error("Lỗi khi tải ảnh bìa sách lên server:", uploadResult.message);
+          alert("Lỗi tải ảnh bìa: " + uploadResult.message);
+          return;
+        }
+      } catch (err) {
+        console.error("Error uploading book cover:", err);
+      }
+    }
+
+    // Chuyển năm xuất bản sang dạng số nguyên
+    const pubYearInt = newBookPublishedYear ? parseInt(newBookPublishedYear, 10) : undefined;
+
+    // Thêm sách vào database PostgreSQL thật để cuốn sách thực sự tồn tại trên hệ thống
+    let dbBookId = "f-" + Date.now();
+    try {
+      const dbResult = await createBookInDb({
+        title: newBookTitle,
+        author: newBookAuthor,
+        coverUrl: finalCoverUrl,
+        summary: newBookSummary,
+        publishedYear: pubYearInt
+      });
+      if (dbResult.success && dbResult.book) {
+        dbBookId = dbResult.book.id;
+      }
+    } catch (dbErr) {
+      console.error("Lỗi khi lưu sách vào database:", dbErr);
+    }
+
     const newBook = {
-      id: "f-" + Date.now(),
+      id: dbBookId,
       title: newBookTitle,
       author: newBookAuthor,
       rating: newBookRating,
-      coverUrl: "https://lh3.googleusercontent.com/aida-public/AB6AXuAC6GKy2vXIuYrlzg-zB_U6wSFH3uOBBk8kru_6awMKuuwQZXT4TL2lDzOtX4V62TZo60yDJR2WHXHX54LJvxyUfzHxiK7sd_zUMpH7-ia76nz6waYryP1Li5z1Bn_FzG18u0V0z8eP8Yxv5Z8JwtDpJlFBz2-m7YuWl_7snHstQUpPrl7KdydPlVMCVSDuNoJMCWccXPBcbMnzRYw6bA3-Ifr0GP4nkS5TKef6ap64VAEXVS7SvagQQ7LrG3IfH3Y419xSKh4U72Y"
+      coverUrl: finalCoverUrl
     };
 
     const updated = [newBook, ...favorites];
@@ -172,6 +352,17 @@ export default function Bookcase() {
     setNewBookTitle("");
     setNewBookAuthor("");
     setNewBookRating(5.0);
+    setNewBookPublishedYear("");
+    setNewBookSummary("");
+    setOpenLibraryResults([]);
+    setExternalCoverUrl("");
+    setSelectedCoverFile(null);
+    if (coverPreviewUrl) {
+      if (coverPreviewUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(coverPreviewUrl);
+      }
+      setCoverPreviewUrl("");
+    }
     triggerNotification(`Đã thêm thành công cuốn "${newBookTitle}" vào tủ sách!`);
   };
 
@@ -208,11 +399,29 @@ export default function Bookcase() {
           {/* Subtle green decoration */}
           <div className="absolute top-0 right-0 w-28 h-28 bg-[#a6f2cf]/10 rounded-full blur-2xl -z-0" />
           
-          <img 
-            src={currentUser.avatarUrl || "https://api.dicebear.com/7.x/adventurer/svg?seed=A"} 
-            alt="profile avatar"
-            className="w-24 h-24 sm:w-28 sm:h-28 rounded-full border-2 border-emerald-800/10 object-cover shrink-0 z-10"
-          />
+          <div className="relative group w-24 h-24 sm:w-28 sm:h-28 rounded-full shrink-0 z-10 overflow-hidden border-2 border-emerald-800/10 bg-gray-50">
+            <img 
+              src={avatarPreviewUrl || currentUser.avatarUrl || "https://api.dicebear.com/7.x/adventurer/svg?seed=A"} 
+              alt="profile avatar"
+              className="w-full h-full object-cover"
+            />
+            {isEditingProfile && (
+              <label 
+                htmlFor="avatar-upload" 
+                className="absolute inset-0 bg-black/45 flex flex-col items-center justify-center text-white text-[10px] font-semibold opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer select-none"
+              >
+                <Camera className="w-5 h-5 mb-1 text-white" />
+                <span>Thay ảnh</span>
+              </label>
+            )}
+            <input 
+              type="file" 
+              id="avatar-upload" 
+              accept="image/*" 
+              className="hidden" 
+              onChange={handleAvatarChange}
+            />
+          </div>
 
           <div className="flex-1 text-left space-y-4 z-10 w-full">
             {isEditingProfile ? (
@@ -240,7 +449,7 @@ export default function Bookcase() {
                   </button>
                   <button 
                     type="button" 
-                    onClick={() => setIsEditingProfile(false)}
+                    onClick={handleCancelEditProfile}
                     className="bg-gray-150 text-gray-700 px-4 py-2 rounded-lg text-xs font-bold hover:bg-gray-200 cursor-pointer border-none"
                   >
                     Hủy
@@ -322,7 +531,7 @@ export default function Bookcase() {
               favorites.map((book) => (
                 <div 
                   key={book.id}
-                  onClick={() => router.push(`/search?q=${encodeURIComponent(book.title)}`)}
+                  onClick={() => router.push(`/search?q=${encodeURIComponent(book.title)}&tab=articles`)}
                   className="bg-white rounded-2xl p-4 border border-gray-150 hover:border-[#a6f2cf] shadow-2xs hover:shadow-md transition-all flex flex-col group cursor-pointer text-left relative"
                 >
                   {/* Delete button float */}
@@ -377,7 +586,7 @@ export default function Bookcase() {
               recents.map((book) => (
                 <div 
                   key={book.id}
-                  onClick={() => router.push(`/search?q=${encodeURIComponent(book.title)}`)}
+                  onClick={() => router.push(`/search?q=${encodeURIComponent(book.title)}&tab=articles`)}
                   className="bg-white rounded-2xl p-6 border border-gray-150 hover:border-[#a6f2cf] shadow-2xs hover:shadow-xs transition-all flex gap-5 items-stretch group cursor-pointer text-left"
                 >
                   <img 
@@ -418,7 +627,7 @@ export default function Bookcase() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setShowAddBookModal(false)}
+              onClick={handleCloseAddBookModal}
               className="absolute inset-0 bg-black/45 backdrop-blur-xs" 
             />
 
@@ -429,7 +638,8 @@ export default function Bookcase() {
               className="relative bg-white rounded-3xl w-full max-w-md p-6 sm:p-8 z-10 shadow-2xl border border-gray-100 text-left font-sans"
             >
               <button
-                onClick={() => setShowAddBookModal(false)}
+                type="button"
+                onClick={handleCloseAddBookModal}
                 className="absolute top-4 right-4 p-1.5 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors focus:outline-none cursor-pointer border-none bg-transparent"
               >
                 <X className="w-5 h-5" />
@@ -447,27 +657,90 @@ export default function Bookcase() {
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400">
                     Tên cuốn sách
                   </label>
-                  <input 
-                    type="text" 
-                    value={newBookTitle}
-                    onChange={(e) => setNewBookTitle(e.target.value)}
-                    placeholder="Suối Nguồn, Cây Cam Ngọt Của Tôi..."
-                    className="w-full px-4 py-3 rounded-xl border border-gray-250 bg-white focus:outline-none focus:ring-2 focus:ring-secondary-container focus:border-primary-green text-sm"
-                    required
-                  />
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      value={newBookTitle}
+                      onChange={(e) => setNewBookTitle(e.target.value)}
+                      placeholder="Cây Cam Ngọt Của Tôi, Suối Nguồn..."
+                      className="flex-1 px-4 py-3 rounded-xl border border-gray-250 bg-white focus:outline-none focus:ring-2 focus:ring-secondary-container focus:border-primary-green text-sm font-semibold"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSearchOpenLibrary}
+                      className="px-3.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold rounded-xl border border-emerald-250 cursor-pointer transition-colors shadow-2xs select-none"
+                      disabled={isSearchingOL}
+                    >
+                      {isSearchingOL ? "..." : "Tìm online"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Open Library Autocomplete Suggestions */}
+                <AnimatePresence>
+                  {openLibraryResults.length > 0 && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -5 }}
+                      className="bg-emerald-50/50 border border-emerald-200/60 rounded-xl p-2.5 space-y-1 text-xs select-none max-h-40 overflow-y-auto"
+                    >
+                      <p className="text-[9px] font-bold text-emerald-850 uppercase tracking-widest px-1.5 pb-1 font-sans">Đề xuất từ Open Library API:</p>
+                      {openLibraryResults.map((sug) => (
+                        <div
+                          key={`${sug.title}-${sug.author}`}
+                          onClick={() => handleSelectOLSuggestion(sug)}
+                          className="px-2.5 py-1.5 hover:bg-white rounded-lg cursor-pointer transition-colors text-left font-sans flex items-center gap-2 border-b border-emerald-100/30 last:border-none"
+                        >
+                          {sug.coverUrl && <img src={sug.coverUrl} className="w-5 h-7 rounded object-cover shrink-0 shadow-2xs bg-gray-100" />}
+                          <div className="min-w-0">
+                            <span className="font-bold text-gray-800 line-clamp-1 leading-tight">{sug.title}</span>
+                            <span className="text-[10px] text-gray-400 block">{sug.author} {sug.publishYear ? `(${sug.publishYear})` : ""}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                      Tác giả
+                    </label>
+                    <input 
+                      type="text" 
+                      value={newBookAuthor}
+                      onChange={(e) => setNewBookAuthor(e.target.value)}
+                      placeholder="José Mauro..."
+                      className="w-full px-4 py-3 rounded-xl border border-gray-250 bg-white focus:outline-none focus:ring-2 focus:ring-secondary-container focus:border-primary-green text-sm"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                      Năm xuất bản
+                    </label>
+                    <input 
+                      type="number" 
+                      value={newBookPublishedYear}
+                      onChange={(e) => setNewBookPublishedYear(e.target.value)}
+                      placeholder="1968, 2026..."
+                      className="w-full px-4 py-3 rounded-xl border border-gray-250 bg-white focus:outline-none focus:ring-2 focus:ring-secondary-container focus:border-primary-green text-sm"
+                    />
+                  </div>
                 </div>
 
                 <div className="space-y-1">
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                    Tác giả
+                    Tóm tắt nội dung sách
                   </label>
-                  <input 
-                    type="text" 
-                    value={newBookAuthor}
-                    onChange={(e) => setNewBookAuthor(e.target.value)}
-                    placeholder="Ayn Rand, José Mauro de Vasconcelos..."
-                    className="w-full px-4 py-3 rounded-xl border border-gray-250 bg-white focus:outline-none focus:ring-2 focus:ring-secondary-container focus:border-primary-green text-sm"
-                    required
+                  <textarea 
+                    value={newBookSummary}
+                    onChange={(e) => setNewBookSummary(e.target.value)}
+                    placeholder="Mô tả nội dung, thông điệp nổi bật của sách..."
+                    className="w-full px-4 py-3 rounded-xl border border-gray-250 bg-white focus:outline-none focus:ring-2 focus:ring-secondary-container focus:border-primary-green text-sm h-20 resize-none font-sans leading-relaxed"
                   />
                 </div>
 
@@ -488,6 +761,34 @@ export default function Bookcase() {
                     <span>1.0 sao</span>
                     <span>3.0 sao</span>
                     <span>5.0 sao</span>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 text-left">
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                    Ảnh bìa sách
+                  </label>
+                  <div className="flex items-center gap-4">
+                    <div className="w-14 h-20 rounded-lg bg-gray-50 border border-gray-200 overflow-hidden flex items-center justify-center text-gray-300 shrink-0">
+                      {coverPreviewUrl ? (
+                        <img src={coverPreviewUrl} className="w-full h-full object-cover" alt="cover preview" />
+                      ) : (
+                        <BookOpen className="w-6 h-6 text-gray-300" />
+                      )}
+                    </div>
+                    <label 
+                      htmlFor="cover-upload" 
+                      className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl cursor-pointer select-none transition-colors border border-gray-200 animate-fade-in"
+                    >
+                      Chọn file ảnh bìa
+                    </label>
+                    <input 
+                      type="file" 
+                      id="cover-upload" 
+                      accept="image/*" 
+                      className="hidden" 
+                      onChange={handleCoverChange}
+                    />
                   </div>
                 </div>
 

@@ -2,6 +2,12 @@
 
 import { prisma } from "../prisma";
 import { User, Book } from "../../types";
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 /**
  * Lấy thống kê tủ sách cá nhân và thông tin Profile của một độc giả từ DB
@@ -133,6 +139,52 @@ export async function updateProfile(
 }
 
 /**
+ * Lấy hoặc Khởi tạo Profile người dùng từ DB thật dựa trên email
+ */
+export async function getOrCreateProfile(
+  email: string,
+  displayName: string
+): Promise<{ success: boolean; profile?: User & { id: string } }> {
+  try {
+    let profile = await prisma.profile.findUnique({
+      where: { email }
+    });
+
+    if (!profile) {
+      const crypto = require("crypto");
+      const newId = crypto.randomUUID();
+      
+      profile = await prisma.profile.create({
+        data: {
+          id: newId,
+          email: email,
+          displayName: displayName,
+          bio: "Thành viên yêu sách của Trạm Đọc Xanh.",
+          role: email.toLowerCase().includes("admin") ? "admin" : "user",
+          avatarUrl: `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(email)}`
+        }
+      });
+    }
+
+    return {
+      success: true,
+      profile: {
+        id: profile.id,
+        name: profile.displayName,
+        email: profile.email,
+        avatarUrl: profile.avatarUrl || undefined,
+        bio: profile.bio || undefined,
+        role: profile.role.toLowerCase() as "user" | "admin"
+      }
+    };
+  } catch (error) {
+    console.error("Error in getOrCreateProfile Server Action:", error);
+    return { success: false };
+  }
+}
+
+
+/**
  * Lấy toàn bộ danh sách sách từ Thư viện DB
  */
 export async function getBooks(): Promise<Book[]> {
@@ -192,3 +244,163 @@ export async function getFeaturedBooks(): Promise<any[]> {
     return [];
   }
 }
+
+/**
+ * Server Action xử lý upload ảnh đại diện an toàn từ phía Server (Bảo mật + Tự động validate)
+ */
+export async function uploadAvatarServer(
+  userId: string,
+  formData: FormData
+): Promise<{ success: boolean; url?: string; message: string }> {
+  try {
+    const file = formData.get("file") as File;
+    if (!file) {
+      return { success: false, message: "Không tìm thấy file tải lên!" };
+    }
+
+    // 1. Kiểm tra định dạng (chỉ cho phép image/*)
+    if (!file.type.startsWith("image/")) {
+      return { success: false, message: "File tải lên bắt buộc phải là định dạng hình ảnh!" };
+    }
+
+    // 2. Giới hạn dung lượng (tối đa 2MB)
+    if (file.size > 2 * 1024 * 1024) {
+      return { success: false, message: "Dung lượng ảnh vượt quá giới hạn cho phép (tối đa 2MB)!" };
+    }
+
+    const fileExt = file.name.split(".").pop() || "jpg";
+    const filePath = `${userId}/avatar.${fileExt}`;
+
+    // Đọc file thành Buffer trên server
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    // 3. Tải lên sử dụng admin client (bỏ qua RLS trên Storage)
+    const { error } = await supabaseAdmin.storage
+      .from("avatars")
+      .upload(filePath, buffer, {
+        contentType: file.type,
+        upsert: true,
+        cacheControl: "31536000"
+      });
+
+    if (error) throw error;
+
+    // 4. Lấy public URL của ảnh
+    const { data: { publicUrl } } = supabaseAdmin.storage
+      .from("avatars")
+      .getPublicUrl(filePath);
+
+    return {
+      success: true,
+      url: `${publicUrl}?t=${Date.now()}`,
+      message: "Tải ảnh đại diện lên thành công!"
+    };
+  } catch (error) {
+    console.error("Lỗi trong uploadAvatarServer Server Action:", error);
+    return { success: false, message: "Lỗi hệ thống khi tải ảnh đại diện lên." };
+  }
+}
+
+/**
+ * Server Action xử lý upload ảnh bìa sách an toàn từ phía Server (Bảo mật + Tự động validate)
+ */
+export async function uploadBookCoverServer(
+  userId: string,
+  formData: FormData
+): Promise<{ success: boolean; url?: string; message: string }> {
+  try {
+    const file = formData.get("file") as File;
+    if (!file) {
+      return { success: false, message: "Không tìm thấy file tải lên!" };
+    }
+
+    // 1. Kiểm tra định dạng (chỉ cho phép image/*)
+    if (!file.type.startsWith("image/")) {
+      return { success: false, message: "File tải lên bắt buộc phải là định dạng hình ảnh!" };
+    }
+
+    // 2. Giới hạn dung lượng (tối đa 3MB cho bìa sách)
+    if (file.size > 3 * 1024 * 1024) {
+      return { success: false, message: "Dung lượng ảnh bìa vượt quá giới hạn cho phép (tối đa 3MB)!" };
+    }
+
+    const fileExt = file.name.split(".").pop() || "jpg";
+    const filePath = `${userId}/${Date.now()}.${fileExt}`;
+
+    // Đọc file thành Buffer trên server
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    // 3. Tải lên sử dụng admin client
+    const { error } = await supabaseAdmin.storage
+      .from("book-covers")
+      .upload(filePath, buffer, {
+        contentType: file.type,
+        upsert: true,
+        cacheControl: "31536000"
+      });
+
+    if (error) throw error;
+
+    const { data: { publicUrl } } = supabaseAdmin.storage
+      .from("book-covers")
+      .getPublicUrl(filePath);
+
+    return {
+      success: true,
+      url: publicUrl,
+      message: "Tải ảnh bìa sách lên thành công!"
+    };
+  } catch (error) {
+    console.error("Lỗi trong uploadBookCoverServer Server Action:", error);
+    return { success: false, message: "Lỗi hệ thống khi tải ảnh bìa sách lên." };
+  }
+}
+
+/**
+ * Thêm một cuốn sách mới vào Database thật (bảng Book) nếu chưa tồn tại
+ */
+export async function createBookInDb(data: {
+  title: string;
+  author: string;
+  coverUrl?: string;
+  summary?: string;
+  publishedYear?: number;
+}): Promise<{ success: boolean; message: string; book?: any }> {
+  try {
+    let book = await prisma.book.findFirst({
+      where: {
+        title: { equals: data.title, mode: "insensitive" },
+        author: { equals: data.author, mode: "insensitive" }
+      }
+    });
+
+    if (!book) {
+      book = await prisma.book.create({
+        data: {
+          title: data.title,
+          author: data.author,
+          coverUrl: data.coverUrl || undefined,
+          summary: data.summary || `Tác phẩm ${data.title} của tác giả ${data.author}.`,
+          publishedYear: data.publishedYear || undefined
+        }
+      });
+      return {
+        success: true,
+        message: "Sách mới đã được thêm vào thư viện database thành công!",
+        book
+      };
+    }
+
+    return {
+      success: true,
+      message: "Sách đã tồn tại trong thư viện database.",
+      book
+    };
+  } catch (error) {
+    console.error("Error in createBookInDb Server Action:", error);
+    return { success: false, message: "Lỗi hệ thống khi thêm sách vào database." };
+  }
+}
+
