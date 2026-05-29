@@ -263,10 +263,6 @@ export default function AuthPage() {
               <h1 className="font-serif text-3xl sm:text-4xl font-bold italic text-primary-green tracking-tight">
                 Trạm Đọc Xanh
               </h1>
-              <div className="bg-secondary-container text-[#00513b] text-[10px] font-bold px-2 py-0.5 rounded-full uppercase flex items-center gap-1">
-                <Sparkles className="w-2.5 h-2.5" />
-                <span>Next.js Ready</span>
-              </div>
             </div>
             <p className="text-sm text-gray-500 font-sans tracking-tight">
               Chào mừng bạn đến với cộng đồng tri thức bền vững.
