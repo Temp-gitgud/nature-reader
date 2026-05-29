@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Mail, Lock, User as UserIcon, ArrowRight, AlertCircle, Sparkles, Leaf, BookOpen, Users } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { User } from "../../types";
-import { getOrCreateProfile } from "../../lib/actions/book";
+import { getOrCreateProfile, getProfileById } from "../../lib/actions/book";
 
 export default function AuthPage() {
   const router = useRouter();
@@ -64,21 +64,55 @@ export default function AuthPage() {
 
     async function authenticate() {
       try {
-        const fallbackName = email.toLowerCase().includes("admin") ? "Administrator" : email.split("@")[0].toUpperCase();
-        const result = await getOrCreateProfile(email, mode === "signup" ? name : fallbackName);
+        if (mode === "signup") {
+          // 1. Gọi API đăng ký qua Supabase Auth
+          const registerRes = await fetch("/api/auth/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email,
+              password,
+              displayName: name
+            })
+          });
+
+          const registerData = await registerRes.json();
+          if (!registerRes.ok) {
+            setIsLoading(false);
+            setError(registerData.message || "Đăng ký không thành công.");
+            return;
+          }
+        }
+
+        // 2. Đăng nhập qua Supabase Auth (cả khi đăng nhập trực tiếp hoặc tự động đăng nhập sau khi đăng ký)
+        const loginRes = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password })
+        });
+
+        const loginData = await loginRes.json();
+        if (!loginRes.ok) {
+          setIsLoading(false);
+          setError(loginData.message || "Tên đăng nhập hoặc mật khẩu không chính xác.");
+          return;
+        }
+
+        // 3. Lấy thông tin profile đồng bộ chuẩn từ DB dựa trên User ID thực tế của Supabase Auth
+        const profileResult = await getProfileById(loginData.user.id);
         
         setIsLoading(false);
-        if (result.success && result.profile) {
-          localStorage.setItem("currentUser", JSON.stringify(result.profile));
+        if (profileResult.success && profileResult.profile) {
+          localStorage.setItem("currentUser", JSON.stringify(profileResult.profile));
           window.dispatchEvent(new Event("auth-state-change"));
           
-          if (result.profile.role === "admin") {
+          if (profileResult.profile.role === "admin") {
             router.push("/admin");
           } else {
             router.push("/");
           }
         } else {
-          setError("Không thể đăng nhập hoặc đồng bộ tài khoản với database.");
+          setError("Tài khoản đã tạo thành công nhưng lỗi đồng bộ thông tin cá nhân từ Database.");
         }
       } catch (err) {
         setIsLoading(false);

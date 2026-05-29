@@ -404,3 +404,36 @@ export async function createBookInDb(data: {
   }
 }
 
+/**
+ * Lấy Profile của người dùng bằng userId thực tế
+ */
+export async function getProfileById(
+  userId: string
+): Promise<{ success: boolean; profile?: User & { id: string } }> {
+  try {
+    const profile = await prisma.profile.findUnique({
+      where: { id: userId }
+    });
+
+    if (!profile || profile.deletedAt) {
+      return { success: false };
+    }
+
+    return {
+      success: true,
+      profile: {
+        id: profile.id,
+        name: profile.displayName,
+        email: profile.email,
+        avatarUrl: profile.avatarUrl || undefined,
+        bio: profile.bio || undefined,
+        role: profile.role.toLowerCase() as "user" | "admin"
+      }
+    };
+  } catch (error) {
+    console.error("Error in getProfileById Server Action:", error);
+    return { success: false };
+  }
+}
+
+
