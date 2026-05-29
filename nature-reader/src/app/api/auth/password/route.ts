@@ -25,30 +25,17 @@ export async function PATCH(req: Request) {
 
     const { password } = result.data
 
-    // Create a Supabase client bound to the user's specific access token
-    const userClient = createClient(
+    // Create a Supabase admin client to directly update the password safely under the authenticated user's ID
+    const adminClient = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false
-        }
-      }
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
     )
 
-    // Set the user's access token
-    const { error: sessionError } = await userClient.auth.setSession({
-      access_token: token,
-      refresh_token: ''
-    })
-
-    if (sessionError) {
-      return NextResponse.json({ message: 'Authentication session failed', error: sessionError.message }, { status: 401 })
-    }
-
-    // Call Supabase updateUser to update password under user context
-    const { error: updateError } = await userClient.auth.updateUser({ password })
+    // Call admin.updateUserById to update the password directly for the authenticated user
+    const { error: updateError } = await adminClient.auth.admin.updateUserById(
+      user.id,
+      { password }
+    )
 
     if (updateError) {
       return NextResponse.json({ message: 'Password update failed', error: updateError.message }, { status: 400 })

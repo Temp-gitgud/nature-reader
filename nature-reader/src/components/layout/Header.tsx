@@ -41,6 +41,7 @@ export default function Header() {
 
   const handleLogout = () => {
     localStorage.removeItem("currentUser");
+    localStorage.removeItem("accessToken");
     setCurrentUser(null);
     // Trigger auth change event
     window.dispatchEvent(new Event("auth-state-change"));

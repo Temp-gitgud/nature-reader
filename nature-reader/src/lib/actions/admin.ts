@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "../prisma";
-import { PostStatus, ModerationAction } from "@prisma/client";
+import { PostStatus, ModerationAction, UserRole } from "@prisma/client";
 import { Article } from "../../types";
 
 // Helper to dynamically map category based on book title
@@ -175,5 +175,53 @@ export async function getAdminUsers(): Promise<{
   } catch (error) {
     console.error("Error in getAdminUsers Server Action:", error);
     return [];
+  }
+}
+
+/**
+ * Thay đổi vai trò người dùng (User <-> Admin) trong DB
+ */
+export async function toggleUserRoleInDb(
+  userId: string,
+  currentRole: string
+): Promise<{ success: boolean; message: string; newRole?: string }> {
+  try {
+    const newRole = currentRole.toLowerCase() === "admin" ? "user" : "admin";
+    const prismaRole = newRole === "admin" ? UserRole.admin : UserRole.user;
+
+    await prisma.profile.update({
+      where: { id: userId },
+      data: { role: prismaRole }
+    });
+
+    return {
+      success: true,
+      message: `Đã thay đổi vai trò thành viên sang ${newRole.toUpperCase()} bền vững trên hệ thống!`,
+      newRole
+    };
+  } catch (error) {
+    console.error("Error in toggleUserRoleInDb:", error);
+    return { success: false, message: "Lỗi hệ thống: Không thể cập nhật vai trò người dùng." };
+  }
+}
+
+/**
+ * Xóa vĩnh viễn tài khoản người dùng khỏi DB
+ */
+export async function deleteUserInDb(
+  userId: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    await prisma.profile.delete({
+      where: { id: userId }
+    });
+
+    return {
+      success: true,
+      message: "Đã gỡ bỏ tài khoản thành viên vĩnh viễn khỏi hệ thống DB!"
+    };
+  } catch (error) {
+    console.error("Error in deleteUserInDb:", error);
+    return { success: false, message: "Lỗi hệ thống: Không thể xóa tài khoản." };
   }
 }

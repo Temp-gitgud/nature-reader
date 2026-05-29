@@ -6,10 +6,11 @@ import { Eye, EyeOff, Mail, Lock, User as UserIcon, ArrowRight, AlertCircle, Spa
 import { motion, AnimatePresence } from "motion/react";
 import { User } from "../../types";
 import { getOrCreateProfile, getProfileById } from "../../lib/actions/book";
+import { supabase } from "../../lib/supabase";
 
 export default function AuthPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [mode, setMode] = useState<"login" | "signup" | "recovery">("login");
   const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -19,8 +20,23 @@ export default function AuthPage() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Redirect to home if already logged in
+  // Redirect to home if already logged in / Parse recovery token
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const hash = window.location.hash;
+    
+    if (params.get("mode") === "recovery" || hash.includes("access_token")) {
+      setMode("recovery");
+      if (hash) {
+        const hashParams = new URLSearchParams(hash.substring(1));
+        const token = hashParams.get("access_token");
+        if (token) {
+          localStorage.setItem("accessToken", token);
+        }
+      }
+      return;
+    }
+
     const user = localStorage.getItem("currentUser");
     if (user) {
       router.push("/");
@@ -104,6 +120,9 @@ export default function AuthPage() {
         setIsLoading(false);
         if (profileResult.success && profileResult.profile) {
           localStorage.setItem("currentUser", JSON.stringify(profileResult.profile));
+          if (loginData.accessToken) {
+            localStorage.setItem("accessToken", loginData.accessToken);
+          }
           window.dispatchEvent(new Event("auth-state-change"));
           
           if (profileResult.profile.role === "admin") {
@@ -128,6 +147,100 @@ export default function AuthPage() {
     setPassword("123456");
     setMode("login");
     setError(null);
+  };
+
+  const handleForgotPassword = async () => {
+    setError(null);
+    if (!email) {
+      setError("Vui lòng nhập địa chỉ email của bạn trước để gửi liên kết khôi phục.");
+      return;
+    }
+    if (!email.includes("@")) {
+      setError("Địa chỉ email không đúng định dạng.");
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth?mode=recovery`,
+      });
+      
+      setIsLoading(false);
+      if (resetError) {
+        setError(resetError.message || "Không thể gửi email khôi phục mật khẩu.");
+      } else {
+        alert(`Một liên kết khôi phục mật khẩu đã được gửi đến email ${email} của bạn! Vui lòng kiểm tra hộp thư.`);
+      }
+    } catch (err) {
+      setIsLoading(false);
+      setError("Lỗi hệ thống khi kết nối đến dịch vụ khôi phục.");
+    }
+  };
+
+  const handleResetPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    if (!password) {
+      setError("Vui lòng nhập mật khẩu mới.");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Mật khẩu phải chứa ít nhất 8 ký tự.");
+      return;
+    }
+    if (!/[A-Z]/.test(password)) {
+      setError("Mật khẩu phải chứa ít nhất một chữ hoa (A-Z).");
+      return;
+    }
+    if (!/[a-z]/.test(password)) {
+      setError("Mật khẩu phải chứa ít nhất một chữ thường (a-z).");
+      return;
+    }
+    if (!/[0-9]/.test(password)) {
+      setError("Mật khẩu phải chứa ít nhất một chữ số (0-9).");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Mật khẩu xác nhận không khớp.");
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const token = localStorage.getItem("accessToken");
+      if (!token) {
+        setError("Không tìm thấy mã khôi phục. Vui lòng thử yêu cầu lại liên kết.");
+        setIsLoading(false);
+        return;
+      }
+
+      const res = await fetch("/api/auth/password", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ password: password })
+      });
+
+      const data = await res.json();
+      setIsLoading(false);
+      if (res.ok) {
+        alert("Khôi phục và đặt lại mật khẩu mới thành công! Vui lòng đăng nhập bằng mật khẩu mới của bạn.");
+        localStorage.removeItem("accessToken");
+        setPassword("");
+        setConfirmPassword("");
+        setMode("login");
+        router.push("/auth");
+      } else {
+        setError(data.message || "Đặt lại mật khẩu thất bại.");
+      }
+    } catch (err) {
+      setIsLoading(false);
+      setError("Lỗi hệ thống khi khôi phục mật khẩu.");
+    }
   };
 
   return (
@@ -161,7 +274,8 @@ export default function AuthPage() {
           </div>
 
           {/* Custom Tab Switcher */}
-          <div className="relative bg-gray-100 p-1 rounded-full flex z-10 select-none">
+          {mode !== "recovery" ? (
+            <div className="relative bg-gray-100 p-1 rounded-full flex z-10 select-none">
             <button
               type="button"
               className={`flex-1 py-2.5 text-xs font-semibold rounded-full z-10 transition-colors duration-300 relative ${
@@ -195,6 +309,12 @@ export default function AuthPage() {
               }}
             />
           </div>
+          ) : (
+            <div className="bg-emerald-50/70 border border-emerald-250 text-emerald-850 p-4 rounded-xl flex items-center gap-3 text-xs">
+              <AlertCircle className="w-4 h-4 shrink-0 text-emerald-600" />
+              <span>Khôi phục & đặt lại mật khẩu mới cho tài khoản của bạn.</span>
+            </div>
+          )}
 
           {/* Validation Error Alerts */}
           <AnimatePresence mode="wait">
@@ -212,7 +332,103 @@ export default function AuthPage() {
           </AnimatePresence>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="space-y-5">
+          {mode === "recovery" ? (
+            <form onSubmit={handleResetPasswordSubmit} className="space-y-5">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500">
+                  Mật khẩu mới
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400">
+                    <Lock className="w-4 h-4" />
+                  </span>
+                  <input
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full pl-10 pr-11 py-3 rounded-xl border border-gray-250 bg-white focus:outline-none focus:ring-2 focus:ring-secondary-container focus:border-primary-green text-sm font-semibold transition-all"
+                    placeholder="Nhập mật khẩu mới..."
+                    type={showPassword ? "text" : "password"}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors bg-transparent border-none cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
+                  </button>
+                </div>
+
+                {/* Password Strength Checklist */}
+                <div className="grid grid-cols-2 gap-2 pt-2 text-[10px] text-gray-400 font-medium">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-1.5 h-1.5 rounded-full ${password.length >= 8 ? 'bg-emerald-500' : 'bg-gray-300'}`} />
+                    <span className={password.length >= 8 ? 'text-emerald-700 font-semibold' : ''}>Tối thiểu 8 ký tự</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-1.5 h-1.5 rounded-full ${/[A-Z]/.test(password) ? 'bg-emerald-500' : 'bg-gray-300'}`} />
+                    <span className={/[A-Z]/.test(password) ? 'text-emerald-700 font-semibold' : ''}>Chữ hoa (A-Z)</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-1.5 h-1.5 rounded-full ${/[a-z]/.test(password) ? 'bg-emerald-500' : 'bg-gray-300'}`} />
+                    <span className={/[a-z]/.test(password) ? 'text-emerald-700 font-semibold' : ''}>Chữ thường (a-z)</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-1.5 h-1.5 rounded-full ${/[0-9]/.test(password) ? 'bg-emerald-500' : 'bg-gray-300'}`} />
+                    <span className={/[0-9]/.test(password) ? 'text-emerald-700 font-semibold' : ''}>Chữ số (0-9)</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500">
+                  Xác nhận mật khẩu mới
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400">
+                    <Lock className="w-4 h-4" />
+                  </span>
+                  <input
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-250 bg-white focus:outline-none focus:ring-2 focus:ring-secondary-container focus:border-primary-green text-sm font-semibold transition-all"
+                    placeholder="Xác nhận mật khẩu mới..."
+                    type={showPassword ? "text" : "password"}
+                    required
+                  />
+                </div>
+              </div>
+
+              <button
+                disabled={isLoading}
+                className={`w-full py-3.5 bg-primary-green text-white text-xs font-semibold uppercase tracking-wider rounded-xl shadow-md cursor-pointer hover:bg-primary-container transition-all active:scale-[0.99] flex items-center justify-center space-x-2 border-none ${
+                  isLoading ? "opacity-75 cursor-not-allowed" : ""
+                }`}
+                type="submit"
+              >
+                {isLoading ? (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <span>Xác nhận mật khẩu mới</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("login");
+                  router.push("/auth");
+                }}
+                className="w-full text-center text-xs text-primary-green hover:underline font-semibold bg-transparent border-none cursor-pointer mt-2"
+              >
+                Quay lại Đăng nhập
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-5">
             <AnimatePresence mode="popLayout">
               {/* Full Name input shown only in signup mode */}
               {mode === "signup" && (
@@ -321,7 +537,7 @@ export default function AuthPage() {
               <div className="flex justify-end">
                 <button
                   type="button"
-                  onClick={() => alert("Chức năng khôi phục mật khẩu demo đã được gửi đến email của bạn!")}
+                  onClick={handleForgotPassword}
                   className="text-xs text-primary-green hover:underline font-medium hover:text-primary-container bg-transparent border-none cursor-pointer"
                 >
                   Quên mật khẩu?
@@ -347,63 +563,68 @@ export default function AuthPage() {
               )}
             </button>
           </form>
+          )}
 
-          {/* Separator */}
-          <div className="relative pt-2">
-            <div className="absolute inset-0 flex items-center">
-              <span className="w-full border-t border-gray-200" />
-            </div>
-            <div className="relative flex justify-center text-xs">
-              <span className="bg-[#fefdfa] px-3 text-gray-400 italic">Trải nghiệm nhanh ứng dụng</span>
-            </div>
-          </div>
+          {mode !== "recovery" && (
+            <>
+              {/* Separator */}
+              <div className="relative pt-2">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t border-gray-200" />
+                </div>
+                <div className="relative flex justify-center text-xs">
+                  <span className="bg-[#fefdfa] px-3 text-gray-400 italic">Trải nghiệm nhanh ứng dụng</span>
+                </div>
+              </div>
 
-          {/* Quick login shortcuts */}
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              onClick={() => handleQuickLogin("readers@tramdocxanh.vn")}
-              className="px-3 py-2 text-xs border border-gray-200 rounded-lg hover:border-primary-green text-gray-600 hover:text-primary-green bg-white text-center font-medium transition-all cursor-pointer"
-            >
-              Tài khoản Độc giả
-            </button>
-            <button
-              onClick={() => handleQuickLogin("admin@tramdocxanh.vn")}
-              className="px-3 py-2 text-xs border border-gray-200 rounded-lg hover:border-primary-green text-gray-600 hover:text-primary-green bg-white text-center font-medium transition-all cursor-pointer"
-            >
-              Tài khoản Admin
-            </button>
-          </div>
-
-          {/* Toggle mode */}
-          <p className="text-center text-xs text-gray-500">
-            {mode === "login" ? (
-              <>
-                Bạn chưa có tài khoản?{" "}
+              {/* Quick login shortcuts */}
+              <div className="grid grid-cols-2 gap-3">
                 <button
-                  onClick={() => {
-                    setMode("signup");
-                    setError(null);
-                  }}
-                  className="text-primary-green font-bold hover:underline bg-transparent border-none cursor-pointer"
+                  onClick={() => handleQuickLogin("readers@tramdocxanh.vn")}
+                  className="px-3 py-2 text-xs border border-gray-200 rounded-lg hover:border-primary-green text-gray-600 hover:text-primary-green bg-white text-center font-medium transition-all cursor-pointer"
                 >
-                  Đăng ký ngay
+                  Tài khoản Độc giả
                 </button>
-              </>
-            ) : (
-              <>
-                Bạn đã có tài khoản?{" "}
                 <button
-                  onClick={() => {
-                    setMode("login");
-                    setError(null);
-                  }}
-                  className="text-primary-green font-bold hover:underline bg-transparent border-none cursor-pointer"
+                  onClick={() => handleQuickLogin("admin@tramdocxanh.vn")}
+                  className="px-3 py-2 text-xs border border-gray-200 rounded-lg hover:border-primary-green text-gray-600 hover:text-primary-green bg-white text-center font-medium transition-all cursor-pointer"
                 >
-                  Đăng nhập
+                  Tài khoản Admin
                 </button>
-              </>
-            )}
-          </p>
+              </div>
+
+              {/* Toggle mode */}
+              <p className="text-center text-xs text-gray-500">
+                {mode === "login" ? (
+                  <>
+                    Bạn chưa có tài khoản?{" "}
+                    <button
+                      onClick={() => {
+                        setMode("signup");
+                        setError(null);
+                      }}
+                      className="text-primary-green font-bold hover:underline bg-transparent border-none cursor-pointer"
+                    >
+                      Đăng ký ngay
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    Bạn đã có tài khoản?{" "}
+                    <button
+                      onClick={() => {
+                        setMode("login");
+                        setError(null);
+                      }}
+                      className="text-primary-green font-bold hover:underline bg-transparent border-none cursor-pointer"
+                    >
+                      Đăng nhập
+                    </button>
+                  </>
+                )}
+              </p>
+            </>
+          )}
         </div>
       </section>
 
