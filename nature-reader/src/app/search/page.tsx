@@ -16,15 +16,19 @@ function SearchResultsContent() {
   const searchParams = useSearchParams();
   const query = searchParams.get("q") || "";
   const [searchText, setSearchText] = useState(query);
-  const [activeTab, setActiveTab] = useState<"books" | "articles" | "users">("books");
+  const tabParam = searchParams.get("tab");
+  const [activeTab, setActiveTab] = useState<"books" | "articles" | "users">((tabParam as any) || "books");
   const [dbBooks, setDbBooks] = useState<any[]>([]);
   const [dbArticles, setDbArticles] = useState<any[]>([]);
   const [dbUsers, setDbUsers] = useState<any[]>([]);
 
-  // Sync search input with query parameter change
+  // Sync search input and tab with query parameter changes
   useEffect(() => {
     setSearchText(query);
-  }, [query]);
+    if (tabParam === "articles" || tabParam === "books" || tabParam === "users") {
+      setActiveTab(tabParam);
+    }
+  }, [query, tabParam]);
 
   // Load dynamic search data on mount & query change
   useEffect(() => {

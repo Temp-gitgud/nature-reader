@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Mail, Lock, User as UserIcon, ArrowRight, AlertCircle, Sparkles, Leaf, BookOpen, Users } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { User } from "../../types";
+import { getOrCreateProfile } from "../../lib/actions/book";
 
 export default function AuthPage() {
   const router = useRouter();
@@ -61,26 +62,31 @@ export default function AuthPage() {
 
     setIsLoading(true);
 
-    // Simulate mock auth login delay
-    setTimeout(() => {
-      setIsLoading(false);
-      const authUser: User = {
-        name: mode === "signup" ? name : (email.toLowerCase().includes("admin") ? "Administrator" : email.split("@")[0].toUpperCase()),
-        email: email,
-        avatarUrl: `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(email)}`,
-        role: email.toLowerCase().includes("admin") ? "admin" : "user",
-      };
-      
-      localStorage.setItem("currentUser", JSON.stringify(authUser));
-      // Dispatch state change event to Header
-      window.dispatchEvent(new Event("auth-state-change"));
-      
-      if (authUser.role === "admin") {
-        router.push("/admin");
-      } else {
-        router.push("/");
+    async function authenticate() {
+      try {
+        const fallbackName = email.toLowerCase().includes("admin") ? "Administrator" : email.split("@")[0].toUpperCase();
+        const result = await getOrCreateProfile(email, mode === "signup" ? name : fallbackName);
+        
+        setIsLoading(false);
+        if (result.success && result.profile) {
+          localStorage.setItem("currentUser", JSON.stringify(result.profile));
+          window.dispatchEvent(new Event("auth-state-change"));
+          
+          if (result.profile.role === "admin") {
+            router.push("/admin");
+          } else {
+            router.push("/");
+          }
+        } else {
+          setError("Không thể đăng nhập hoặc đồng bộ tài khoản với database.");
+        }
+      } catch (err) {
+        setIsLoading(false);
+        console.error(err);
+        setError("Đã xảy ra lỗi hệ thống khi kết nối database.");
       }
-    }, 1200);
+    }
+    authenticate();
   };
 
   const handleQuickLogin = (emailPreset: string) => {
