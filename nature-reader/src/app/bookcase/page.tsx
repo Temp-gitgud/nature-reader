@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import React, { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { 
   BookOpen, Star, Sparkles, ChevronRight, Heart, MessageSquare, Edit3, Trash2, Plus, 
-  User as UserIcon, BookCheck, Compass, FileText, Check, Award, X, Camera
+  User as UserIcon, BookCheck, Compass, FileText, Check, Award, X, Camera,
+  Lock, AlertCircle, Eye, EyeOff
 } from "lucide-react";
 import Header from "../../components/layout/Header";
 import Footer from "../../components/layout/Footer";
@@ -12,8 +13,126 @@ import RatingStars from "../../components/ui/RatingStars";
 import { motion, AnimatePresence } from "motion/react";
 import { getBookcaseStats, updateProfile, uploadAvatarServer, uploadBookCoverServer, createBookInDb } from "../../lib/actions/book";
 
-export default function Bookcase() {
+function BookcaseContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const activeTab = searchParams.get("tab") === "settings" ? "settings" : "profile";
+
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [showNewPass, setShowNewPass] = useState(false);
+  const [showConfirmNewPass, setShowConfirmNewPass] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [isSubmittingPass, setIsSubmittingPass] = useState(false);
+
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [terminateError, setTerminateError] = useState<string | null>(null);
+  const [isSubmittingTerminate, setIsSubmittingTerminate] = useState(false);
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSettingsError(null);
+
+    // Validation
+    if (newPassword.length < 8) {
+      setSettingsError("Mật khẩu phải chứa ít nhất 8 ký tự.");
+      return;
+    }
+    if (!/[A-Z]/.test(newPassword)) {
+      setSettingsError("Mật khẩu phải chứa ít nhất một ký tự hoa (A-Z).");
+      return;
+    }
+    if (!/[a-z]/.test(newPassword)) {
+      setSettingsError("Mật khẩu phải chứa ít nhất một ký tự thường (a-z).");
+      return;
+    }
+    if (!/[0-9]/.test(newPassword)) {
+      setSettingsError("Mật khẩu phải chứa ít nhất một chữ số (0-9).");
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setSettingsError("Mật khẩu xác nhận không khớp.");
+      return;
+    }
+
+    setIsSubmittingPass(true);
+    try {
+      const token = localStorage.getItem("accessToken");
+      if (!token) {
+        setSettingsError("Bạn không có quyền thực hiện hành động này. Vui lòng đăng nhập lại.");
+        setIsSubmittingPass(false);
+        return;
+      }
+
+      const res = await fetch("/api/auth/password", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ password: newPassword })
+      });
+
+      const data = await res.json();
+      setIsSubmittingPass(false);
+      if (res.ok) {
+        setNewPassword("");
+        setConfirmNewPassword("");
+        triggerNotification("Cập nhật mật khẩu mới cực kỳ an toàn thành công!");
+      } else {
+        if (res.status === 401) {
+          setSettingsError("Phiên đăng nhập đã hết hạn hoặc không hợp lệ. Vui lòng đăng xuất và đăng nhập lại để cập nhật mật khẩu.");
+        } else {
+          setSettingsError(data.message || "Cập nhật mật khẩu thất bại.");
+        }
+      }
+    } catch (err) {
+      setIsSubmittingPass(false);
+      setSettingsError("Lỗi hệ thống khi kết nối database.");
+    }
+  };
+
+  const handleTerminateAccount = async () => {
+    if (deleteConfirmText !== "DELETE") return;
+    setTerminateError(null);
+    setIsSubmittingTerminate(true);
+
+    try {
+      const token = localStorage.getItem("accessToken");
+      if (!token) {
+        setTerminateError("Bạn không có quyền thực hiện hành động này. Vui lòng đăng nhập lại.");
+        setIsSubmittingTerminate(false);
+        return;
+      }
+
+      const res = await fetch("/api/account", {
+        method: "DELETE",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        }
+      });
+
+      const data = await res.json();
+      setIsSubmittingTerminate(false);
+      if (res.ok) {
+        localStorage.removeItem("currentUser");
+        localStorage.removeItem("accessToken");
+        window.dispatchEvent(new Event("auth-state-change"));
+        router.push("/");
+        alert("Tài khoản của bạn đã được xóa hoàn toàn và lưu giữ các bài review dưới dạng ẩn danh.");
+      } else {
+        if (res.status === 401) {
+          setTerminateError("Phiên đăng nhập đã hết hạn hoặc không hợp lệ. Vui lòng đăng xuất và đăng nhập lại để thực hiện xóa tài khoản.");
+        } else {
+          setTerminateError(data.message || "Xóa tài khoản thất bại.");
+        }
+      }
+    } catch (err) {
+      setIsSubmittingTerminate(false);
+      setTerminateError("Lỗi hệ thống khi xóa tài khoản.");
+    }
+  };
+
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [favorites, setFavorites] = useState<any[]>([]);
   const [recents, setRecents] = useState<any[]>([]);
@@ -394,8 +513,231 @@ export default function Bookcase() {
           )}
         </AnimatePresence>
 
-        {/* Profile Card Banner */}
-        <section className="bg-white rounded-3xl p-6 sm:p-10 border border-gray-150 shadow-2xs flex flex-col md:flex-row gap-8 items-start md:items-center relative overflow-hidden">
+        {/* Tab Switcher */}
+        <div className="flex border-b border-gray-150 pb-px gap-6 mb-8 relative">
+          <button
+            onClick={() => {
+              router.push("/bookcase?tab=profile");
+            }}
+            className={`pb-3.5 text-xs sm:text-sm font-semibold uppercase tracking-wider transition-all relative flex items-center gap-2 cursor-pointer border-none bg-transparent ${
+              activeTab === "profile" 
+                ? "text-[#004532] font-bold" 
+                : "text-gray-400 hover:text-[#004532]"
+            }`}
+          >
+            <BookOpen className="w-4 h-4" />
+            <span>Tủ sách & Hồ sơ</span>
+            {activeTab === "profile" && (
+              <motion.div 
+                layoutId="activeTabUnderline" 
+                className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#004532]" 
+              />
+            )}
+          </button>
+          <button
+            onClick={() => {
+              router.push("/bookcase?tab=settings");
+            }}
+            className={`pb-3.5 text-xs sm:text-sm font-semibold uppercase tracking-wider transition-all relative flex items-center gap-2 cursor-pointer border-none bg-transparent ${
+              activeTab === "settings" 
+                ? "text-[#004532] font-bold" 
+                : "text-gray-400 hover:text-[#004532]"
+            }`}
+          >
+            <Lock className="w-4 h-4" />
+            <span>Cài đặt bảo mật</span>
+            {activeTab === "settings" && (
+              <motion.div 
+                layoutId="activeTabUnderline" 
+                className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#004532]" 
+              />
+            )}
+          </button>
+        </div>
+
+        {activeTab === "settings" ? (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+            {/* Left Col: Info panel */}
+            <div className="lg:col-span-1 space-y-6">
+              <div className="bg-white rounded-3xl p-6 border border-gray-150 shadow-2xs text-left">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center mb-4">
+                  <Lock className="w-6 h-6 text-[#004532]" />
+                </div>
+                <h4 className="font-serif text-lg font-bold text-gray-900">Bảo mật tài khoản</h4>
+                <p className="text-xs text-gray-500 mt-2 leading-relaxed font-light">
+                  Tại đây bạn có thể cập nhật mật khẩu đăng nhập hoặc tiến hành vô hiệu hóa / xóa vĩnh viễn tài khoản của mình khỏi hệ thống.
+                </p>
+                <div className="mt-4 p-3 bg-amber-50/50 border border-amber-200/50 rounded-xl flex gap-2 text-[11px] text-amber-800">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+                  <p className="leading-relaxed">
+                    Mật khẩu mới yêu cầu tối thiểu 8 ký tự, bao gồm ít nhất 1 chữ hoa, 1 chữ thường và 1 số để đảm bảo tính an toàn cực đại.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Col: Forms */}
+            <div className="lg:col-span-2 space-y-8">
+              {/* Form đổi mật khẩu */}
+              <div className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-150 shadow-2xs text-left">
+                <h4 className="font-serif text-lg font-bold text-gray-900 border-b border-gray-100 pb-3 mb-6">
+                  Đổi mật khẩu mới
+                </h4>
+
+                <form onSubmit={handleChangePassword} className="space-y-5">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500">
+                      Mật khẩu mới
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400">
+                        <Lock className="w-4 h-4" />
+                      </span>
+                      <input
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        className="w-full pl-10 pr-11 py-3 rounded-xl border border-gray-250 bg-white focus:outline-none focus:ring-2 focus:ring-secondary-container focus:border-primary-green text-sm font-semibold transition-all"
+                        placeholder="Nhập mật khẩu mới..."
+                        type={showNewPass ? "text" : "password"}
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPass(!showNewPass)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors bg-transparent border-none cursor-pointer"
+                      >
+                        {showNewPass ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
+                      </button>
+                    </div>
+
+                    {/* Live Password Strength Checklist */}
+                    <div className="grid grid-cols-2 gap-2 pt-2 text-[10px] text-gray-400 font-medium">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 rounded-full ${newPassword.length >= 8 ? 'bg-emerald-500' : 'bg-gray-300'}`} />
+                        <span className={newPassword.length >= 8 ? 'text-emerald-700 font-semibold' : ''}>Tối thiểu 8 ký tự</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 rounded-full ${/[A-Z]/.test(newPassword) ? 'bg-emerald-500' : 'bg-gray-300'}`} />
+                        <span className={/[A-Z]/.test(newPassword) ? 'text-emerald-700 font-semibold' : ''}>Chữ hoa (A-Z)</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 rounded-full ${/[a-z]/.test(newPassword) ? 'bg-emerald-500' : 'bg-gray-300'}`} />
+                        <span className={/[a-z]/.test(newPassword) ? 'text-emerald-700 font-semibold' : ''}>Chữ thường (a-z)</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 rounded-full ${/[0-9]/.test(newPassword) ? 'bg-emerald-500' : 'bg-gray-300'}`} />
+                        <span className={/[0-9]/.test(newPassword) ? 'text-emerald-700 font-semibold' : ''}>Chữ số (0-9)</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500">
+                      Xác nhận mật khẩu mới
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400">
+                        <Lock className="w-4 h-4" />
+                      </span>
+                      <input
+                        value={confirmNewPassword}
+                        onChange={(e) => setConfirmNewPassword(e.target.value)}
+                        className="w-full pl-10 pr-11 py-3 rounded-xl border border-gray-250 bg-white focus:outline-none focus:ring-2 focus:ring-secondary-container focus:border-primary-green text-sm font-semibold transition-all"
+                        placeholder="Nhập lại mật khẩu mới..."
+                        type={showConfirmNewPass ? "text" : "password"}
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmNewPass(!showConfirmNewPass)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors bg-transparent border-none cursor-pointer"
+                      >
+                        {showConfirmNewPass ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {settingsError && (
+                    <div className="bg-red-50 border border-red-200 text-red-700 p-3.5 rounded-xl flex items-center gap-2.5 text-xs">
+                      <AlertCircle className="w-4.5 h-4.5 shrink-0 text-red-500" />
+                      <span>{settingsError}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={isSubmittingPass}
+                    className={`bg-[#004532] text-white text-xs font-semibold uppercase tracking-wider py-3 px-6 rounded-xl hover:bg-[#065f46] cursor-pointer transition-all border-none flex items-center gap-2 shadow-2xs ${isSubmittingPass ? 'opacity-70 cursor-not-allowed' : ''}`}
+                  >
+                    {isSubmittingPass ? (
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <Check className="w-4.5 h-4.5" />
+                        <span>Cập nhật mật khẩu</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+
+              {/* Khu vực Danger Zone xóa tài khoản */}
+              <div className="bg-red-50/20 border border-red-200/60 rounded-3xl p-6 sm:p-8 text-left relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-full blur-xl" />
+                
+                <h4 className="font-serif text-lg font-bold text-red-800 border-b border-red-100 pb-3 mb-4 flex items-center gap-2">
+                  <Trash2 className="w-5 h-5 text-red-650" />
+                  <span>Danger Zone (Vùng nguy hiểm)</span>
+                </h4>
+                
+                <p className="text-xs text-gray-550 leading-relaxed font-light mb-5">
+                  Khi thực hiện xóa tài khoản, toàn bộ thông tin cá nhân của bạn sẽ bị gỡ bỏ vĩnh viễn khỏi cơ sở dữ liệu. Các bài viết review và bình luận của bạn sẽ được ẩn danh hoặc tự động gán dưới tên người dùng ẩn danh để bảo toàn tài nguyên tri thức cộng đồng. Hành động này không thể hoàn tác!
+                </p>
+
+                <div className="space-y-4 max-w-md">
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-red-700">
+                      Nhập chữ <span className="font-bold select-all bg-red-100/60 px-1 py-0.5 rounded text-red-800">DELETE</span> để xác nhận
+                    </label>
+                    <input
+                      value={deleteConfirmText}
+                      onChange={(e) => setDeleteConfirmText(e.target.value)}
+                      className="w-full px-4 py-3 rounded-xl border border-red-200 bg-white focus:outline-none focus:ring-2 focus:ring-red-100 focus:border-red-550 text-sm font-semibold transition-all"
+                      placeholder="DELETE..."
+                      type="text"
+                    />
+                  </div>
+
+                  {terminateError && (
+                    <div className="bg-red-50 border border-red-200 text-red-750 p-3.5 rounded-xl flex items-center gap-2.5 text-xs">
+                      <AlertCircle className="w-4.5 h-4.5 shrink-0 text-red-500" />
+                      <span>{terminateError}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleTerminateAccount}
+                    disabled={deleteConfirmText !== "DELETE" || isSubmittingTerminate}
+                    className={`bg-red-600 text-white text-xs font-semibold uppercase tracking-wider py-3 px-6 rounded-xl hover:bg-red-700 cursor-pointer transition-all border-none flex items-center gap-2 shadow-2xs ${deleteConfirmText !== "DELETE" || isSubmittingTerminate ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    {isSubmittingTerminate ? (
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <AlertCircle className="w-4.5 h-4.5" />
+                        <span>Xóa vĩnh viễn tài khoản</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Profile Card Banner */}
+            <section className="bg-white rounded-3xl p-6 sm:p-10 border border-gray-150 shadow-2xs flex flex-col md:flex-row gap-8 items-start md:items-center relative overflow-hidden">
           {/* Subtle green decoration */}
           <div className="absolute top-0 right-0 w-28 h-28 bg-[#a6f2cf]/10 rounded-full blur-2xl -z-0" />
           
@@ -616,6 +958,8 @@ export default function Bookcase() {
             )}
           </div>
         </section>
+        </>
+        )}
       </main>
 
       {/* Add Book Modal Form popup */}
@@ -806,5 +1150,17 @@ export default function Bookcase() {
 
       <Footer />
     </div>
+  );
+}
+
+export default function Bookcase() {
+  return (
+    <Suspense fallback={
+      <div className="w-full min-h-screen flex items-center justify-center bg-[#fcfcf9]">
+        <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#004532] border-t-transparent" />
+      </div>
+    }>
+      <BookcaseContent />
+    </Suspense>
   );
 }

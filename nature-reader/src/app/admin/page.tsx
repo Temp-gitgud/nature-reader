@@ -10,7 +10,7 @@ import { motion, AnimatePresence } from "motion/react";
 import Header from "../../components/layout/Header";
 import Footer from "../../components/layout/Footer";
 import RatingStars from "../../components/ui/RatingStars";
-import { getPendingArticles, moderateArticle, getAdminStats, getAdminUsers } from "../../lib/actions/admin";
+import { getPendingArticles, moderateArticle, getAdminStats, getAdminUsers, toggleUserRoleInDb, deleteUserInDb } from "../../lib/actions/admin";
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -179,21 +179,39 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleToggleUserRole = (email: string) => {
-    const updated = users.map(u => 
-      u.email === email ? { ...u, role: u.role === "admin" ? "user" : "admin" } : u
-    );
-    setUsers(updated);
-    localStorage.setItem("mockUsers", JSON.stringify(updated));
-    triggerToast("Đã thay đổi quyền tài khoản người dùng.");
+  const handleToggleUserRole = async (userId: string, currentRole: string) => {
+    try {
+      const res = await toggleUserRoleInDb(userId, currentRole);
+      if (res.success && res.newRole) {
+        const updated = users.map(u => 
+          u.id === userId ? { ...u, role: res.newRole! } : u
+        );
+        setUsers(updated);
+        triggerToast(res.message);
+      } else {
+        triggerToast(res.message || "Không thể cập nhật quyền thành viên.");
+      }
+    } catch (err) {
+      console.error("Error toggling user role:", err);
+      triggerToast("Lỗi kết nối khi thay đổi quyền người dùng.");
+    }
   };
 
-  const handleDeleteUser = (email: string) => {
+  const handleDeleteUser = async (userId: string, email: string) => {
     if (confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn tài khoản ${email}?`)) {
-      const updated = users.filter(u => u.email !== email);
-      setUsers(updated);
-      localStorage.setItem("mockUsers", JSON.stringify(updated));
-      triggerToast("Đã gỡ bỏ tài khoản thành viên.");
+      try {
+        const res = await deleteUserInDb(userId);
+        if (res.success) {
+          const updated = users.filter(u => u.id !== userId);
+          setUsers(updated);
+          triggerToast(res.message);
+        } else {
+          triggerToast(res.message || "Xóa tài khoản thất bại.");
+        }
+      } catch (err) {
+        console.error("Error deleting user:", err);
+        triggerToast("Lỗi kết nối khi xóa tài khoản.");
+      }
     }
   };
 
@@ -526,7 +544,7 @@ export default function AdminDashboard() {
 
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => handleToggleUserRole(u.email)}
+                        onClick={() => handleToggleUserRole(u.id, u.role)}
                         className={`px-3 py-1.5 rounded-lg font-bold text-[10px] uppercase tracking-wider transition-colors cursor-pointer border focus:outline-none ${
                           u.role === "admin" 
                             ? "bg-emerald-50 border-emerald-200 text-emerald-800" 
@@ -537,7 +555,7 @@ export default function AdminDashboard() {
                       </button>
 
                       <button
-                        onClick={() => handleDeleteUser(u.email)}
+                        onClick={() => handleDeleteUser(u.id, u.email)}
                         className="p-2 text-gray-400 hover:text-red-500 rounded-full hover:bg-red-50/50 transition-colors focus:outline-none border-none bg-transparent cursor-pointer"
                         title="Ban tài khoản"
                       >
